@@ -1,0 +1,1420 @@
+<?php
+
+/**
+ * @file
+ * Bulk order packaging functionality.
+ */
+
+/**
+ * Implements hook_menu().
+ * 
+ * Bulk order header menu that appears above the ubercart's order page.
+ */
+function bulk_order_menu() {
+  $items = array();
+  $items['bulk/orders/labels']  = array(
+    'title' => 'Create Labels',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array(
+      'create_labels',
+    ),
+    'access arguments' => array(
+      'bulk order menu',
+    ),
+    'file' => 'bulk_order.inc',
+    'type' => MENU_CALLBACK,
+  );
+  $items['bulk/orders/purchase-labels']   = array(
+    'title' => 'Create Labels',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array(
+      'purchase_labels',
+    ),
+    'access arguments' => array(
+      'bulk order menu',
+    ),
+    'file' => 'bulk_order.inc',
+    'type' => MENU_CALLBACK,
+  );
+  $items['bulk/orders/print']   = array(
+    'title' => 'Print & Update Order',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array(
+      'print_order',
+    ),
+    'access arguments' => array(
+      'bulk order menu',
+    ),
+    'file' => 'bulk_order.inc',
+    'type' => MENU_CALLBACK,
+  );
+  $items['bulk/orders/packing_slip/view/%/%']   = array(
+    'title' => 'View packing slip',
+    'page callback' => 'view_packing_slip_page',
+    'page arguments' => array(4,5),
+    'access arguments' => array(
+      'bulk order menu',
+    ),
+    'file' => 'bulk_order.inc',
+    'type' => MENU_CALLBACK,
+  );
+  $items['jzebra/label_print'] = array(
+    'title' => 'View/print shipping label with jZebra',
+    'description' => 'Configure jZebra integration',
+    'page callback' => 'jzebra_label_print_dialog',
+    'access arguments' => array('bulk order menu'),
+    'file' => 'bulk_order.inc',
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ * 
+ * To create access permission on bulk order header menu.
+ */
+function bulk_order_permission() {
+  return array(
+    'bulk order menu' => array(
+      'title' => t('Bulk order menu'),
+      'description' => t('Allows bulk order menu'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_action_info().
+ * 
+ * To change VBO Execute action.
+ */
+function bulk_order_action_info() {
+  return array(
+    'bulk_order_packaging' => array(
+      'type' => 'entity',
+      'label' => t('create package'),
+      'configurable' => FALSE,
+      'behavior' => array(
+        'view_property',
+      ),
+      'triggers' => array(
+        'any',
+      ),
+      // 'aggregate' => TRUE,
+    ),
+  );
+}
+
+/**
+ * Add action callback to perform action on custom vbo execute.
+ */
+function bulk_order_packaging(&$entity, $context = array()) {
+  if (module_exists('uc_autopack')) {
+    // Call to uc_autopack module function for autopackaging of orders.
+    $account = user_load($entity->uid);
+    uc_autopack_uc_checkout_complete($entity, $account);
+  }
+}
+
+/**
+ * Implements hook_form_alter(). 
+ * 
+ * Alter the ubercart's order page to add bulk order header.
+ */
+function bulk_order_form_alter(&$form, &$form_state, $form_id) {
+  // Weight alteration on package order page (screen 2).
+  if ($form['#id'] == 'views-form-uber-cart-order-bulk-page') {
+    $form['output']['#weight'] = -30;
+  }
+  // Fields alteration on package order page (screen 2).
+  if (isset($form['#id']) && ($form['#id'] == 'views-exposed-form-uber-cart-order-bulk-page')) {
+    // Theming of view exposed filters.
+    $form['#theme'] = array('bulk_order_view');
+    // Query to extract product SKU field from uc_products table.
+    $query   = db_select('uc_products', 'uc_sku')->fields('uc_sku', array(
+        'model',
+        ));
+    $sku_res = $query->execute()->fetchCol();
+    $sku     = array();
+    $sku[] = t("Any");
+    foreach ($sku_res as $key => $value) {
+      $sku[] = $value;
+    }
+    // To change the SKU field in the filter from textfield to select type.
+    $form['model']['#type']     = 'select';
+    $form['model']['#options']  = drupal_map_assoc($sku);
+    $form['model']['#multiple'] = 1;
+    $form['model']['#size']     = 8;
+    // To get shipping methods for the shipping method dropdown.
+    $methods1 = array();
+    $methods1['Any'] = t('Any');
+    foreach (uc_quote_methods(TRUE) as $method) {
+      if (isset($method['quote'])) {
+        $id = $method['id'];
+        $methods1[$method['title']] = drupal_map_assoc($method['quote']['accessorials']);
+      }
+    }
+//    // Query to extract shipping method field from uc_flatrate_methods table.
+//    $query   = db_select('uc_flatrate_methods', 'sm')->fields('sm', array(
+//      'title',
+//        ));
+//    $sm_res = $query->execute()->fetchAll();
+//    $sm     = array();
+//    $sm[] = t('Any');
+//    foreach ($sm_res as $key => $value) {
+//      $sm[] = $value->title;
+//    }
+    // To change shipping method field in filter from textfield to select type.
+    $form['title']['#type']     = 'select';
+    $form['title']['#options']  = $methods1;
+    $form['title']['#multiple'] = 1;
+    $form['title']['#size']     = 8;
+    // Query to retrieve order status data.
+    // Assign it to the option list of order status field in filter.
+    $statuses = array();
+    $statuses['any'] = t('Any');
+    $statuses['_active'] = t('Active');
+    $status_res = uc_order_status_list();
+    foreach ($status_res as $key => $value) {
+      $statuses[$value['id']] = $value['title'];
+    }
+    $form['order_status']['#options']  = $statuses;
+    // To alter date start range field.
+    $form['created']   = array(
+      '#date_format' => 'Y-m-d',
+      '#date_year_range' => '-3:+3',
+      '#type' => 'date_popup',
+      '#weight' => 0,
+    );
+    // To alter date end range field.
+    $form['created_1'] = array(
+      '#date_format' => 'Y-m-d',
+      '#date_year_range' => '-3:+3',
+      '#type' => 'date_popup',
+      '#weight' => 0,
+    );
+    // Adds min weight into the bulk order filter page.
+    $form['Weight_start']['#title']         = t('Min Weight:');
+    $form['Weight_start']['#type']          = 'textfield';
+    $form['Weight_start']['#default_value'] = '';
+    $form['Weight_start']['#size']          = 20;
+    $form['Weight_start']['#prefix']        = '<div id="weight-start-field">';
+    $form['Weight_start']['#suffix']        = '</div>';
+    // Adds max weight into the bulk order filter page.
+    $form['Weight_end']['#title']           = t('Max Weight:');
+    $form['Weight_end']['#type']            = 'textfield';
+    $form['Weight_end']['#default_value']   = '';
+    // To add placeholder to order id range field.
+    $form['order_id_1']['#attributes']['placeholder'] = t('Start');
+    $form['order_id']['#attributes']['placeholder'] = t('End');
+    // To add placeholder to date range field.
+    $form['created']['#attributes']['placeholder'] = t('Start');
+    $form['created_1']['#attributes']['placeholder'] = t('End');
+
+    // Change menu style of "Package Orders" page (screen 2).
+    $css = ".bulk-order-container span.package {background-color: #d7e2f5; border: 2px solid #949BF1;}";
+    drupal_add_css($css, 'inline');
+  }
+  /* To create header section of bulk order page.
+   * Contains header title, and other three links to package orders,
+   * ship packages and print & update screens.
+   *
+   * For admin order screen.
+   */
+  if (isset($form['#id']) && ($form['#id'] == 'views-exposed-form-uc-orders-admin-page')) {
+    $form['#theme'] = array('store_order_view');
+    $form['link_container']                = array(
+      '#type' => 'fieldset',
+      '#weight' => -1,
+    );
+    $form['link_container']['title']       = array(
+      '#type' => 'markup',
+      '#markup' => '<span class="title">' . t('Cloud Postage - Batch Order Processing') . '</span>',
+      '#prefix' => '<div class="bulk-order-container">',
+    );
+    $form['link_container']['package']     = array(
+      '#type' => 'markup',
+      '#markup' => l(t('Package Orders'), 'uber-cart-order-bulk', array(
+          'attributes' => array(
+            'class' => array(
+              'package_order',
+            ),
+          ),
+      )),
+      '#prefix' => '<span class="package">',
+      '#suffix' => '</span>',
+    );
+    $form['link_container']['labels']      = array(
+      '#type' => 'markup',
+      '#markup' => l(t('Create Labels'), 'bulk/orders/labels', array(
+          'attributes' => array(
+            'class' => array(
+              'create_labels',
+            ),
+          ),
+      )),
+      '#prefix' => '<span class="order">',
+      '#suffix' => '</span>',
+    );
+    $form['link_container']['print_order'] = array(
+      '#type' => 'markup',
+      '#markup' => l(t('Print & Update'), 'bulk/orders/print', array(
+          'attributes' => array(
+            'class' => array(
+              'print_update',
+            ),
+          ),
+      )),
+      '#prefix' => '<span class="print">',
+      '#suffix' => '</span></div>',
+    );
+  }
+  // End of Header section.
+
+}
+
+/**
+ * Implements hook_views_query_alter().
+ * 
+ * @param object $view
+ * @param object $query
+ */
+function bulk_order_views_query_alter(&$view, &$query) {
+  if (!empty($view->exposed_raw_input['Weight_start']) && !empty($view->exposed_raw_input['Weight_end'])) {
+    // Altering query to filter according to the weight range.
+    $wt_start = $view->exposed_raw_input['Weight_start'];
+    $wt_end = $view->exposed_raw_input['Weight_end'];
+    $query1 = db_query("SELECT SUM(a.tweight), a.order_id FROM (SELECT p1.order_id,CASE p1.weight_units WHEN 'g' THEN (p1.qty*p1.weight*0.0022) WHEN 'kg' THEN (p1.qty*p1.weight*2.20) WHEN 'oz' THEN (p1.qty*p1.weight*0.0625) ELSE p1.qty*p1.weight END AS 'tweight' FROM `uc_order_products` p1 left JOIN uc_packages p2 ON p2.order_id=p1.order_id where p2.order_id IS NULL) as a GROUP BY a.order_id HAVING sum(a.tweight) BETWEEN :wt_start AND :wt_end", array(':wt_start' => $wt_start, ':wt_end' => $wt_end))->fetchAll();
+    $odr_range = array();
+    foreach ($query1 as $key => $value) {
+      $odr_range[] = $value->order_id;
+    }
+    $query->add_where(1, 'uc_orders.order_id', array(
+          $odr_range,
+        ), 'IN');
+  }
+  foreach ($query->where as &$condition_group) {
+    foreach ($condition_group['conditions'] as &$condition) {
+      if (!isset($condition['field']) || !is_string($condition['field'])) {
+        continue;
+      }
+      // Adding query to handle action on any item of order status list.
+      elseif ($condition['field'] == 'uc_orders.order_status') {
+        if (!empty($view->exposed_raw_input['order_status']['any'])) {
+          $condition = array(
+            'field' => 'uc_orders.order_status',
+            'value' => 'any',
+            'operator' => '!=',
+          );
+        }
+      }
+      // To alter query for option list of shipping method field.
+      elseif ($condition['field'] == 'uc_order_line_items_shipping.title') {
+        if (!empty($view->exposed_raw_input['title']['Any'])) {
+          $condition = array(
+            'field' => 'uc_order_line_items_shipping.title',
+            'value' => 'any',
+            'operator' => '!=',
+          );
+        }
+        else {
+          $condition = array(
+            'field' => 'uc_order_line_items_shipping.title',
+            'value' => (array) $condition['value'],
+            'operator' => 'IN',
+          );
+        }
+      }
+      // To alter query for option list of sku field.
+      elseif ($condition['field'] == 'uc_order_products_uc_orders.model') {
+        if (!empty($view->exposed_raw_input['model']['Any'])) {
+          $condition = array(
+            'field' => 'uc_order_products_uc_orders.model',
+            'value' => 'any',
+            'operator' => '!=',
+          );
+        }
+        else {
+          $condition = array(
+            'field' => 'uc_order_products_uc_orders.model',
+            'value' => (array) $condition['value'],
+            'operator' => 'IN',
+          );
+        }
+      }
+    }
+  }
+}
+
+
+/**
+ * Function to create rows of unshipped packages list table.
+ * 
+ * @see create_labels()
+ */
+function create_labels_table($form, &$form_state) {
+  $rows   = array();
+  $query = db_select('uc_packaged_products', 'pp');
+  $query->innerJoin('uc_packages', 'p', 'p.package_id= pp.package_id');
+  $query->leftJoin('uc_order_products', 'op', 'op.order_product_id = pp.order_product_id');
+  $query->isNull('p.sid')
+  ->fields('p', array('package_id'))
+  ->fields('op', array('order_id'))
+  ->groupBy('pp.package_id');
+  $query->addExpression('SUM(pp.qty)', 'qty');
+  $query->addExpression('GROUP_CONCAT(op.model)', 'model');
+  $query->addExpression("ROUND(SUM(CASE op.weight_units WHEN 'g' THEN (pp.qty*op.weight*0.0022) WHEN 'kg' THEN (pp.qty*op.weight*2.20) WHEN 'oz' THEN (pp.qty*op.weight*0.0625) ELSE pp.qty*op.weight END),2)", 'total_wt');
+  $result = $query->extend('PagerDefault')->limit(30);
+  $pkg_res = $result->execute()->fetchAll();
+  foreach ($pkg_res as $package) {
+    $row = array();
+    // Package id coloumn.
+    $row[]       = $package->package_id;
+    // Order id column.
+    $link['options']['attributes']['target'] = '_blank';
+    $row[] = l($package->order_id, 'admin/store/orders/' . $package->order_id,
+        array('attributes' => $link['options']['attributes']));
+    // Loading order details.
+    $order = uc_order_load($package->order_id);
+    $order_date = $order->created;
+    // Retrieving country name.
+    $country_data = uc_get_country_data(array('country_id' => $order->delivery_country));
+    $delivery_country_name = $country_data[0]['country_name'];
+    // Purchase date column.
+    $row[]         = date('Y-M-d', $order_date);
+    // SKU column.
+    $row[]         = $package->model;
+    // Product quantity column.
+    $row[]         = $package->qty;
+    // Order weight column.
+    $row[]         = $package->total_wt . ' lb';
+    $result4 = db_select('uc_order_line_items', 'sm')
+                ->fields('sm', array('title'))
+                ->condition('sm.order_id', $package->order_id, '=');
+    $result4_res = $result4->execute()->fetchAll();
+    $ship_method = "N/A";
+    if (!empty($result4_res)) {
+      $ship_method = $result4_res[0]->title;
+    }
+    // Shipping method coloumn.
+    $row[] = $ship_method;
+    // Delivery country name.
+    $row[] = $delivery_country_name;
+    $row[] = " ";
+    $rows[$package->package_id] = $row;
+  }
+  return $rows;
+}
+
+/**
+ * Implements hook_form_validate().
+ * 
+ * To check whether packages are selected or not.
+ * Atleast one package should be selected to calculate postage cost.
+ * @see create_labels()
+ */
+function create_labels_validate($form, &$form_state) {
+  $packages = $form_state['input']['create_labels_table'];
+
+  $ispackages = array();
+  foreach ($packages as $key => $package_id) {
+    if (isset($package_id)) {
+      $ispackages[] = $package_id;
+    }
+  }
+  if ((empty($ispackages))) {
+    form_set_error('create_labels_table', t('No packages has been selected. Please select at least any package.'));
+    $form_state['rebuild'] = FALSE;
+  }
+}
+
+/**
+ * Implements hook_submit().
+ * 
+ * To handle create labels page submit action.
+ * @see create_labels()
+ */
+function create_labels_submit($form, &$form_state) {
+  $_SESSION['bulk_order'] = array();
+  $_SESSION['bulk_order']['label_options'] = $form_state['input']['label_options'];
+  $_SESSION['bulk_order']['label_presets'] = $form_state['input']['label_presets'];
+  if ($form_state['input']['label_options'] == 0) {
+    // Gets first option of mail piece shape dropdown list.
+    reset($form['lable_container']['mailpiece']['#options']);
+    $_SESSION['bulk_order']['mailpiece'] = current($form['lable_container']['mailpiece']['#options']);
+    // Gets first option of domestic shipping class.
+    reset($form['lable_container']['dom_ship_class']['#options']);
+    $_SESSION['bulk_order']['dom_ship_class'] = current($form['lable_container']['dom_ship_class']['#options']);
+    // Gets first option of international shipping class.
+    reset($form['lable_container']['dom_ship_class']['#options']);
+    $_SESSION['bulk_order']['int_ship_class'] = current($form['lable_container']['int_ship_class']['#options']);
+  }
+  else {
+    $_SESSION['bulk_order']['mailpiece'] = $form_state['input']['mailpiece'];
+    $_SESSION['bulk_order']['dom_ship_class'] = $form_state['input']['dom_ship_class'];
+    $_SESSION['bulk_order']['int_ship_class'] = $form_state['input']['int_ship_class'];
+  }
+  $_SESSION['bulk_order']['includes'] = $form_state['input']['includes'];
+  if (isset($form_state['input']['create_labels_table'])) {
+    $packages = array();
+    foreach ($form_state['input']['create_labels_table'] as $key => $package_id) {
+      if (isset($package_id)) {
+        $packages[] = $package_id;
+        $pkg_wt = $form['create_labels_table']['#options'][$package_id][5];
+      }
+    }
+  }
+  $_SESSION['bulk_order']['packages'] = $packages;
+  drupal_goto('bulk/orders/purchase-labels');
+}
+
+
+/**
+ * Function to create rows of unshipped packages list with calculated shipping cost.
+ * @see purchase_labels()
+ */
+function purchase_labels_table() {
+
+  $label_options_var = $_SESSION['bulk_order']['label_options'];
+  $label_presets_var = $_SESSION['bulk_order']['label_presets'];
+  $mailpiece_var = $_SESSION['bulk_order']['mailpiece'];
+  $dom_ship_class_var = $_SESSION['bulk_order']['dom_ship_class'];
+  $int_ship_class_var = $_SESSION['bulk_order']['int_ship_class'];
+  $includes_var = $_SESSION['bulk_order']['includes'];
+  $packages_var = $_SESSION['bulk_order']['packages'];
+  $total_cost = 0;
+  $rows   = array();
+  $pkg_cost = array();
+  foreach ($packages_var as $key => $package_id) {
+    $package = uc_shipping_package_load($package_id);
+    $row = array();
+    // Package id coloumn.
+    $row[]       = $package->package_id;
+    $product_sku = array();
+    $order_qty   = 0;
+    $product_wt  = 0;
+    $result2     = db_query("SELECT op.order_product_id, pp.qty, op.title,"
+        . " op.model, op.order_id, op.weight,op.weight_units"
+        . " FROM {uc_packaged_products} pp LEFT JOIN {uc_order_products} op ON"
+        . " op.order_product_id = pp.order_product_id WHERE pp.package_id = :id",
+        array(
+          ':id' => $package->package_id,
+        ));
+    foreach ($result2 as $product) {
+      $product_sku[] = check_plain($product->model);
+      $order_qty     = $order_qty + $product->qty;
+      $unit_conversion = uc_weight_conversion($product->weight_units);
+      $product_wt    = $product_wt + ($unit_conversion * $product->weight * $product->qty);
+    }
+    // Order id column.
+    $link['options']['attributes']['target'] = '_blank';
+    $row[] = l($package->order_id, 'admin/store/orders/' . $package->order_id,
+        array('attributes' => $link['options']['attributes']));
+
+    $order_id = $package->order_id;
+    // Loading order details using order_id.
+    $order = uc_order_load($order_id);
+    $order_date = $order->created;
+    // To get postal_code from order.
+    $dest_postal_code = $order->delivery_postal_code;
+    // Retrieving country name.
+    $country_data = uc_get_country_data(array('country_id' => $order->delivery_country));
+    $dest_country_name = $country_data[0]['country_name'];
+    $dest_country_code = $country_data[0]['country_iso_code_2'];
+    // Purchase date column.
+    $row[]         = date('Y-M-d', $order_date);
+    // SKU column.
+    $row[]         = implode(', ', $product_sku);
+    // To clear product_sku for the current iteration.
+    $product_sku[] = "";
+    // Product quantity column.
+    $row[]         = $order_qty;
+    // To clear order_qty for the current iteration.
+    $order_qty     = 0;
+    // Order weight column.
+    $row[]         = round($product_wt, 2) . ' lb';
+    // To clear product_qty for the current iteration.
+    $product_wt    = 0;
+    // To retrieve shipping methods.
+    $result4 = db_select('uc_order_line_items', 'sm')
+                ->fields('sm', array('title'))
+                ->condition('sm.order_id', $package->order_id, '=');
+    $result4_res = $result4->execute()->fetchAll();
+    $ship_method = "N/A";
+    if (!empty($result4_res)) {
+      $ship_method = $result4_res[0]->title;
+    }
+    // Shipping method coloumn.
+    $row[] = $ship_method;
+    // Delivery country name.
+    $row[] = $dest_country_name;
+    // Calculates Shipping Cost for selected packages.
+    $is_international = ($dest_country_code != 'US');
+    // Mail classes available for the destination country.
+    $mail_classes = _endicia_mail_classes($is_international ? 'International' : 'Domestic');
+    $mail_class_rates = array();
+    $sender_info = (array) variable_get('uc_quote_store_default_address', new UcAddress());
+    if (isset($sender_info['postal_code'])) {
+      $sender_postal_code = $sender_info['postal_code'];
+    }
+    else {
+      drupal_set_message('Pickup Postal code is not set.', 'error');
+    }
+    $mailpieceshape = $mailpiece_var;
+    $dom_ship_class = $dom_ship_class_var;
+    $int_ship_class = $int_ship_class_var;
+    // Determine the package's weight.
+    $weight_unit_ratio = ($package->weight_units != 'oz' ?
+        uc_weight_conversion($package->weight_units, 'oz') : 1);
+    $weight = round($package->weight * $weight_unit_ratio, 1);
+    if ($weight == 0) {
+      drupal_set_message(t('Package #@packageid has a total weight of 0. You must set product weights in order to use Endicia.', array('@packageid' => $package_id)), 'error');
+      continue;
+    }
+    // Set request data for API call to calculate postage rates.
+    $data = array(
+      'AccountID' => variable_get('endicia_account_id', ''),
+      'Password' => variable_get('endicia_passphrase', ''),
+      'MailClass' => ($is_international ? "International" : "Domestic"),
+      'MailpieceShape' => $mailpieceshape,
+      'Weight' => $weight,
+      'Sender' => array(
+        'PostalCode' => $sender_postal_code,
+      ),
+      'Recipient' => array(
+        'PostalCode' => $dest_postal_code,
+        'CountryCode' => $dest_country_code,
+        'Country' => $dest_country_name,
+      ),
+      // FIXME: API manual says this is optional, but it isn't?
+      'CODAmount' => 0,
+      // Same here.
+      'InsuredValue' => uc_endicia_get_package_value($package),
+      // You guessed it, here also.
+      'RegisteredMailValue' => 0,
+      'DateAdvance' => 0,
+      'Services' => array(),
+    );
+    if ($label_options_var == 0) {
+      $data['Services']['SignatureConfirmation'] = 'OFF';
+      $data['Services']['DeliveryConfirmation'] = 'OFF';
+      $data['Services']['HoldForPickup'] = 'OFF';
+    }
+    else {
+      $data['Services']['SignatureConfirmation'] = isset($includes_var['signature_confirmation']) ? 'ON' : 'OFF';
+      $data['Services']['DeliveryConfirmation'] = isset($includes_var['pickup_confirmation']) ? 'ON' : 'OFF';
+      $data['Services']['HoldForPickup'] = isset($includes_var['hold_for_pickup']) ? 'ON' : 'OFF';
+    }
+    // Send only the ZIP5 for US postal codes.
+    if (!$is_international && preg_match('/\d+-\d+/', $dest_postal_code)) {
+      list($zip5, $zip4) = explode('-', $dest_postal_code, 2);
+      $data['Recipient']['PostalCode'] = $zip5;
+    }
+    // Make the API request.
+    $uri = _endicia_in_test_mode() ? ENDICIA_TEST_URI : ENDICIA_PRODUCTION_URI;
+    $response_node = 'PostageRatesResponse';
+    $response = endicia_api_request($uri, 'CalculatePostageRates', $data, $response_node);
+    // Check for failures.
+    if ($response === FALSE) {
+      drupal_set_message(t("Error in calculating postage cost."), 'error');
+      _endicia_communication_error_redirect('bulk/orders/labels');
+    }
+    // Check for errors.
+    if ($error = endicia_api_request_error_check($response, $response_node)) {
+      $message = 'Could not retrieve postage rate calculations for package #@packageid. Please ensure that your order contains a valid destination address (check the site log for additional details).';
+      $variables = array(
+        '@packageid' => $package->package_id,
+      );
+      drupal_set_message(t($message, $variables), 'error');
+      continue;
+    }
+    // Keep tallies of rates by mail class.
+    if (is_array($response->PostageRatesResponse->PostagePrice)) {
+      foreach ($response->PostageRatesResponse->PostagePrice as $rate) {
+        // Avoid a PHP undefined index warnings;
+        // initialize or add to the existing index if necessary.
+        $mail_class_rates[$rate->MailClass] = isset($mail_class_rates[$rate->MailClass]) ? $mail_class_rates[$rate->MailClass] + $rate->TotalAmount : $rate->TotalAmount;
+      }
+    }
+    else {
+      $rate = &$response->PostageRatesResponse->PostagePrice;
+      $mail_class_rates[$rate->MailClass] = isset($mail_class_rates[$rate->MailClass]) ? $mail_class_rates[$rate->MailClass] + $rate->TotalAmount : $rate->TotalAmount;
+    }
+    // Process pricing information returned from API request and add it to the form.
+    $mail_class_estimates = array();
+    foreach ($mail_class_rates as $class => $total) {
+      $class_text = isset($mail_classes[$class]) ? $mail_classes[$class] : t('[Title missing] @name', array('@name' => $class));
+      $mail_class_estimates[$class] = $total;
+    }
+    // Check for shipping cost is available for selected class.
+    // If not then redirect back to the create labels page.
+    $mailclass = ($is_international) ? $int_ship_class : $dom_ship_class;
+    if (isset($mail_class_estimates[$mailclass])) {
+      $post_cost = $mail_class_estimates[$mailclass];
+    }
+    else {
+      drupal_set_message(t('No shipping cost set for @ship_class shipping class', array('@ship_class' => $mailclass)), 'error');
+      drupal_goto('bulk/orders/labels');
+    }
+    $row[] = uc_currency_format($post_cost);
+    $rows[$package->package_id] = $row;
+    $total_cost = $total_cost + $post_cost;
+    $pkg_cost[$package->package_id] = $post_cost;
+  }
+  return array($rows, $total_cost, $pkg_cost);
+}
+
+/**
+ * Implements hook_form_validate().
+ * 
+ * To check total cost should not exceed the account balance.
+ */
+function purchase_labels_submit_validate($form, &$form_state) {
+  // Checks whether packages are selected or not.
+  $packages = $form_state['input']['create_labels_table'];
+
+  $ispackages = array();
+  foreach ($packages as $key => $package_id) {
+    if (isset($package_id)) {
+      $ispackages[] = $package_id;
+    }
+  }
+  if ((empty($ispackages))) {
+    drupal_set_message("No packages has been selected.", "error");
+    $form_state['rebuild'] = TRUE;
+    drupal_goto('bulk/orders/purchase-labels');
+  }
+  // Get postage account balance.
+  $account_info = endicia_get_account_status();
+  if ($account_info === FALSE || $account_info == array()) {
+    $balance = t('Unknown');
+  }
+  else {
+    $balance = $account_info['PostageBalance'];
+  }
+  // Selected packages.
+  $packages = $form_state['values']['create_labels_table'];
+  $pkg_cost = $_SESSION['pkg_cost'];
+  $sel_pkg = 0;
+  foreach ($packages as $key => $value) {
+    if ($value != 0) {
+      $sel_pkg = $sel_pkg + $pkg_cost[$value];
+    }
+  }
+  if ($sel_pkg > $balance) {
+    $css = ".balance-field, .cost-field {border : red 1px solid }";
+    drupal_add_css($css, 'inline');
+    form_set_error('balance', t('Total cost of selected packages exceeded the account balance. Please add more funds.'));
+  }
+}
+
+/**
+ * To implement back button functionality for purchase_label page.
+ * @see purchase_labels()
+ */
+function purchase_back_button($form, &$form_state) {
+  // Destroy session data of previous screen.
+  unset($_SESSION['bulk_order']);
+  drupal_goto('bulk/orders/labels');
+}
+
+/**
+ * Implements hook_submit().
+ * 
+ * To purchase labels. 
+ * Calls the GetPostageLabel API.
+ * 
+ * @see purchase_labels()
+ */
+function purchase_shipping_labels_submit($form, &$form_state) {
+  global $user;
+  $label_presets_var = $_SESSION['bulk_order']['label_presets'];
+  $mailpiece_var = $_SESSION['bulk_order']['mailpiece'];
+  $dom_ship_class_var = $_SESSION['bulk_order']['dom_ship_class'];
+  $int_ship_class_var = $_SESSION['bulk_order']['int_ship_class'];
+  $includes_var = $_SESSION['bulk_order']['includes'];
+  $pkg_cost = $_SESSION['pkg_cost'];
+  // Selected packages.
+  $packages = $form_state['input']['create_labels_table'];
+  $ship_id = array();
+  foreach ($packages as $key => $package_id) {
+    // Loading package details.
+    $package = uc_shipping_package_load($package_id);
+    if (isset($package_id)) {
+      $mail_shape = $mailpiece_var;
+      $ship_cost = $pkg_cost[$package_id];
+      // Loading order details.
+      $order = uc_order_load($package->order_id);
+      // Destination details.
+      $dest_name = $order->delivery_first_name . ' ' . $order->delivery_last_name;
+      $dest_address1 = $order->delivery_street1;
+      $dest_address2 = $order->delivery_street2;
+      $dest_city = $order->delivery_city;
+      $dest_zone = $order->delivery_zone;
+      $dest_postal_code = $order->delivery_postal_code;
+      // Retrieving state name.
+      $dest_zone_code = uc_get_zone_code($dest_zone);
+      // Retrieving country_code and country name.
+      $country_data = uc_get_country_data(array('country_id' => $order->delivery_country));
+      $dest_country_code = $country_data[0]['country_iso_code_2'];
+      $dest_country_name = $country_data[0]['country_name'];
+      $dest_phone = $order->delivery_phone;
+      $dest_email = $order->primary_email;
+      $dest_company = $order->delivery_company;
+      // Sender's details.
+      $sender_info = (array) variable_get('uc_quote_store_default_address', new UcAddress());
+      $sender_name = $sender_info['first_name'] . ' ' . $sender_info['last_name'];
+      $sender_address1 = $sender_info['street1'];
+      $sender_address2 = $sender_info['street2'];
+      $sender_city = $sender_info['city'];
+      $sender_state = $sender_info['zone'];
+      $sender_country = $sender_info['country'];
+      $sender_phone = $sender_info['phone'];
+      $sender_email = $sender_info['email'];
+      $sender_postal_code = $sender_info['postal_code'];
+      // Retrieving country name from uc_countries.
+      $country_data = uc_get_country_data(array('country_id' => $sender_country));
+      $sender_country_name = $country_data[0]['country_name'];;
+      // Retrieving zone name (state).
+      $sender_zone_name = uc_zone_get_by_id($sender_state);
+      $is_international = ($dest_country_code != 'US');
+      $mail_ship_class = ($is_international) ? $int_ship_class_var : $dom_ship_class_var;
+      // Determine package weight.
+      $pkg_wt_query     = db_query("SELECT op.order_product_id, pp.qty, op.title,"
+          . " op.model, op.order_id, op.weight,op.weight_units"
+          . " FROM {uc_packaged_products} pp LEFT JOIN {uc_order_products} op ON"
+          . " op.order_product_id = pp.order_product_id WHERE pp.package_id = :id",
+          array(
+            ':id' => $package_id,
+          ));
+      $order_qty = 0;
+      $pkg_wt = 0;
+      foreach ($pkg_wt_query as $product) {
+        $product_sku[] = check_plain($product->model);
+        $order_qty     = $order_qty + $product->qty;
+        $unit_conversion = uc_weight_conversion($product->weight_units);
+        $pkg_wt    = $pkg_wt + ($unit_conversion * $product->weight * $product->qty);
+      }
+      $weight_unit_ratio = uc_weight_conversion('lb', 'oz');
+      $weight = round($pkg_wt * $weight_unit_ratio, 1);
+      $data = array(
+        'AccountID' => variable_get('endicia_account_id', ''),
+        'Password' => variable_get('endicia_passphrase', ''),
+        'Class' => $mail_ship_class,
+        'Packaging' => $mail_shape,
+        'Weight' => $weight,
+        'DeclaredValue' => $package->value,
+        'Description' => t('Shipment of products from your order #@order_id', array('@order_id' => $package->order_id)),
+        'CustomerID' => $user->uid,
+        'TransactionID' => sprintf('c-%s', time()),
+        'Recipient' => array(
+          'Name' => $dest_name,
+          'Company' => $dest_company,
+          'Address1' => $dest_address1,
+          'Address2' => $dest_address2,
+          'City' => $dest_city,
+          'State' => $dest_zone_code,
+          'CountryCode' => $dest_country_code,
+          'Country' => $dest_country_name,
+          'Phone' => preg_replace("/[^0-9]/", "", $dest_phone),
+          'Email' => $dest_email,
+          'PostalCode' => $dest_postal_code,
+        ),
+        'Sender' => array(
+          'Name' => $sender_name,
+          'Address1' => $sender_address1,
+          'Address2' => $sender_address2,
+          'City' => $sender_city,
+          'State' => $sender_zone_name,
+          'Country' => $sender_country_name,
+          'PostalCode' => $sender_postal_code,
+          'Phone' => preg_replace("/[^0-9]/", "", $sender_phone),
+          'Email' => $sender_email,
+        ),
+        'Test' => _endicia_in_test_mode() ? 'YES' : 'NO',
+        'CostCenter' => 0,
+        'Services' => array(),
+        'LabelFormat' => variable_get('endicia_label_image_format', 'PNG'),
+        // Outdated but requests are refused without them (CustomsQuantity,
+        // CustomsValue, CustomsWeight).
+        'CustomsQuantity1' => '0',
+        'CustomsValue1' => '0',
+        'CustomsWeight1' => '0',
+        'CustomsQuantity2' => '0',
+        'CustomsValue2' => '0',
+        'CustomsWeight2' => '0',
+        'CustomsQuantity3' => '0',
+        'CustomsValue3' => '0',
+        'CustomsWeight3' => '0',
+        'CustomsQuantity4' => '0',
+        'CustomsValue4' => '0',
+        'CustomsWeight4' => '0',
+        'CustomsQuantity5' => '0',
+        'CustomsValue5' => '0',
+        'CustomsWeight5' => '0',
+      );
+
+      // Determine shipping options.
+      foreach ($includes_var as $option => $value) {
+        if ($value) {
+          switch ($option) {
+            case 'signature_confirmation':
+              $data['Services']['SignatureConfirmation'] = 'ON';
+              break;
+
+            case 'pickup_confirmation':
+              $data['Services']['DeliveryConfirmation'] = 'ON';
+              break;
+
+            case 'hold_for_pickup':
+              $data['Services']['HoldForPickup'] = 'ON';
+              break;
+
+            case 'usps_form_2976':
+              $data['CustomsInfo'] = array();
+              break;
+
+          }
+        }
+      }
+      if (isset($data['CustomsInfo'])) {
+        // Customs integrated forms, if applicable.
+        $customs_items = array();
+        $products = $package->products;
+        if (($product_count = count($products)) > 0) {
+          for ($i = 0, $product = reset($products); $i < $product_count; $i++, $product = next($products)) {
+            $product_weight = round($product->weight * $weight_unit_ratio, 1);
+            $customs_items[] = array(
+              'Description' => $product->title,
+              'Quantity' => $product->qty,
+              'Weight' => $product_weight,
+              'Value' => $product->price,
+            );
+          }
+        }
+
+        $label_type = $is_international ? 'International' : 'Domestic';
+        $form_type = 'Form2976';
+        // This is ugly, but there isn't much we can do.
+        $general_case = ($label_type == 'International' && in_array($data['Class'], array('PriorityMailInternational', 'ExpressMailInternational')));
+        $exception_int_flenv_prio = $label_type == 'International' && $data['Packaging'] == 'FlatRateEnvelope' && $data['Class'] == 'PriorityMailInternational';
+        if ($general_case && !$exception_int_flenv_prio) {
+          $form_type .= 'A';
+        }
+        if (count($customs_items)) {
+          if ($form_type == 'Form2976' && count($customs_items) > 5) {
+            drupal_set_message(t('Only 5 item descriptors are supported on the USPS Form 2976 due to 4x6 label size constraints.'), 'error');
+            return FALSE;
+          }
+          $data += array(
+            'LabelType' => $label_type,
+            'LabelSubtype' => 'Integrated',
+            'IntegratedFormType' => $form_type,
+          );
+          $data['CustomsInfo'] += array(
+            'ContentsType' => 'Merchandise',
+            'CustomsItems' => $customs_items,
+          );
+        }
+      }
+      // Determine label size: Endicia uses a WxH notation, we want a 6x4 in all cases.
+      if ($is_international) {
+        $data['LabelSize'] = '4x6c';
+      }
+      else {
+        $data['LabelSize'] = '4x6';
+        if (!in_array($data['LabelFormat'], array('EPL2', 'ZPLII'))) {
+          $data['LabelRotation'] = 'Rotate90';
+        }
+      }
+
+      $uri = _endicia_in_test_mode() ? ENDICIA_TEST_URI : ENDICIA_PRODUCTION_URI;
+      $response_node = 'LabelRequestResponse';
+      $response = endicia_api_request($uri, 'GetPostageLabel', $data, $response_node);
+      // Check for failures.
+      if ($response === FALSE) {
+        // Watchdog already notified.
+        _endicia_communication_error_redirect('bulk/orders/purchase-labels');
+      }
+      // Check for errors.
+      if ($error = endicia_api_request_error_check($response, $response_node)) {
+        $message = 'Could not generate label due to error #@errornum: %errormsg (check the site log for additional details).';
+        $variables = array(
+          '@errornum' => $error['status'],
+          '%errormsg' => $error['message'],
+        );
+        drupal_set_message(t($message, $variables), 'error');
+        drupal_goto('bulk/orders/purchase-labels');
+      }
+      // If this node is here, only one label was returned.
+      $image_format = variable_get('endicia_label_image_format', 'PNG');
+      $extension = '.' . _endicia_get_file_extension($image_format);
+
+      $result = FALSE;
+      $tracking_num = $response->LabelRequestResponse->TrackingNumber;
+      if (isset($response->LabelRequestResponse->Base64LabelImage)) {
+        // Single image returned as base64
+        $filename = 'label-cloud-' . $tracking_num . $extension;
+        $data = base64_decode($response->LabelRequestResponse->Base64LabelImage);
+        $result = endicia_save_label($filename, $data, 'endicia_ui', $tracking_num);
+      }
+      else {
+        if (is_array($response->LabelRequestResponse->Label->Image)) {
+          // Two+ labels returned as base64 under their own nodes.
+          foreach ($response->LabelRequestResponse->Label->Image as $labelpart) {
+            $filename = 'label-cloud-' . $tracking_num . '-' . $labelpart->PartNumber . $extension;
+            $data = base64_decode($labelpart->_);
+            $result = endicia_save_label($filename, $data, 'endicia_ui', $tracking_num);
+            if (!$result) {
+              break;
+            }
+          }
+        }
+        else {
+          // One label returned  as base64 under its own node.
+          $labelpart = &$response->LabelRequestResponse->Label->Image;
+          $filename = 'label-cloud-' . $tracking_num . '-' . $labelpart->PartNumber . $extension;
+          $data = base64_decode($labelpart->_);
+          $result = endicia_save_label($filename, $data, 'endicia_ui', $tracking_num);
+        }
+      }
+      if (!$result) {
+        drupal_set_message(t("Could not save the label image due to insufficient permissions. Please verify that Drupal's private files directory exists and is writable."), 'error');
+        drupal_goto('bulk/orders/purchase-labels');
+      }
+      else {
+        // Saves label details into db.
+        $origin_src = array(
+          'pickup_first_name' => $sender_info['first_name'],
+          'pickup_last_name' => $sender_info['last_name'],
+          'pickup_organisation_name' => $sender_info['company'],
+          'pickup_thoroughfare' => $sender_info['street1'],
+          'pickup_premise' => $sender_info['street2'],
+          'pickup_locality' => $sender_info['city'],
+          'pickup_administrative_area' => $sender_info['zone'],
+          'pickup_postal_code' => $sender_info['postal_code'],
+          'pickup_country' => $sender_info['company'],
+          'pickup_phone' => $sender_info['phone'],
+          'pickup_email' => $sender_info['email'],
+        );
+        $delivery_src = array(
+          'delivery_first_name' => $order->delivery_first_name,
+          'delivery_last_name' => $order->delivery_last_name,
+          'delivery_organisation_name' => $dest_company,
+          'delivery_thoroughfare' => $dest_address1,
+          'delivery_premise' => $dest_address2,
+          'delivery_locality' => $dest_city,
+          'delivery_administrative_area' => $dest_zone,
+          'delivery_postal_code' => $order->delivery_postal_code,
+          'delivery_country' => $dest_country_name,
+          'delivery_phone' => $dest_phone,
+          'delivery_email' => $dest_email,
+        );
+        $origin = _endicia_get_address($origin_src, 'pickup');
+        $destination = _endicia_get_address($delivery_src, 'delivery');
+        $shipment = new stdClass();
+        $shipment->order_id = $package->order_id;
+        $shipment->origin = clone $origin;
+        $shipment->destination = clone $destination;
+        $shipment->packages = array($package);
+        $shipment->package_id = $package_id;
+        $shipment->fid = $result->fid;
+
+        $shipment->shipping_method = 'endicia';
+        $shipment->accessorials = $mail_ship_class;
+        $shipment->carrier = t('USPS');
+        $shipment->cost = $response->LabelRequestResponse->FinalPostage;
+        $shipment->tracking_number = $response->LabelRequestResponse->TrackingNumber;
+        $ship_date['year'] = substr($response->LabelRequestResponse->TransactionDateTime, 0, 4);
+        $ship_date['month'] = substr($response->LabelRequestResponse->TransactionDateTime, 4, 2);
+        $ship_date['day'] = substr($response->LabelRequestResponse->TransactionDateTime, 6, 2);
+        $ship_date['hour'] = substr($response->LabelRequestResponse->TransactionDateTime, 8, 2);
+        $ship_date['min'] = substr($response->LabelRequestResponse->TransactionDateTime, 10, 2);
+        $ship_date['sec'] = substr($response->LabelRequestResponse->TransactionDateTime, 12, 2);
+        $timestamp = gmmktime($ship_date['hour'], $ship_date['min'], $ship_date['sec'], $ship_date['month'], $ship_date['day'], $ship_date['year']);
+        $shipment->ship_date = $timestamp;
+
+        // Calls shipment_save() to save new shipment and update uc_package table.
+        $sid = shipment_save($shipment);
+        $ship_id[] = $sid;
+        // Retrieve order_status of an order to be pass in save_shiping_label_info().
+        $order_status = uc_order_status_data($order->order_status, 'title');
+        // To create queue for label printing.
+        if ($is_international) {
+          $ship_class = _endicia_mail_classes('International');
+          $ship_class = $ship_class[$_SESSION['bulk_order']['int_ship_class']];
+        }
+        else {
+          $ship_class = _endicia_mail_classes('Domestic');
+          $ship_class = $ship_class[$_SESSION['bulk_order']['dom_ship_class']];
+        }
+        save_shiping_label_info($sid, $shipment, $order_status, $mail_shape, $ship_class);
+      }
+    }
+    else {
+      continue;
+    }
+  }
+  drupal_set_message(t('Label has been generated successfully.'));
+  // Destroy session data of previous screen.
+  unset($_SESSION['bulk_order']);
+  unset($_SESSION['pkg_cost']);
+  // Create session of selected packages for purchasing label to be used in print & update screen.
+  $_SESSION['selected_pkg'] = $ship_id;
+  drupal_goto('bulk/orders/print');
+}
+
+/**
+ * Function shipment_save().
+ * 
+ * Saves a shipment detail into uc_shipment to insert new shipment and
+ * uc_packages for updating package details.
+ */
+function shipment_save($shipment) {
+  // Saves Shipment record into uc_shipments table.
+  if (isset($shipment->origin)) {
+    foreach ($shipment->origin as $field => $value) {
+      $field = 'o_' . $field;
+      $shipment->$field = $value;
+      $fields[$field] = $value;
+    }
+  }
+  if (isset($shipment->destination)) {
+    foreach ($shipment->destination as $field => $value) {
+      $field = 'd_' . $field;
+      $shipment->$field = $value;
+      $fields[$field] = $value;
+    }
+  }
+
+  $shipment->changed = time();
+
+  if (!isset($shipment->sid)) {
+    drupal_write_record('uc_shipments', $shipment);
+    $shipment->is_new = TRUE;
+  }
+  else {
+    drupal_write_record('uc_shipments', $shipment, 'sid');
+    $shipment->is_new = FALSE;
+  }
+
+  // Updates uc_packages table with new shipping details.
+  db_update('uc_packages')
+    ->fields(array(
+      'value' => $shipment->cost,
+      'sid' => $shipment->sid,
+      'tracking_number' => $shipment->tracking_number,
+      'label_image' => $shipment->fid,
+    ))
+    ->condition('package_id', $shipment->package_id)
+    ->execute();
+  return $shipment->sid;
+}
+
+/**
+ * Function save_shiping_label_info().
+ * 
+ * Inserts shipment details with label.
+ */
+function save_shiping_label_info($sid, $shipment, $order_status, $mail_shape, $mail_ship_class) {
+  db_insert('print_label_queue')
+  ->fields(array(
+    'sid' => $sid,
+    'order_id' => $shipment->order_id,
+    'order_status' => $order_status,
+    'ship_date' => $shipment->ship_date,
+    'exp_ship_date' => 0, // excepted date. Not need for now.
+    'tracking_number' => $shipment->tracking_number,
+    'mail_shape' => $mail_shape,
+    'mail_class' => $mail_ship_class,
+    'ship_cost' => $shipment->cost,
+    'label_fid' => $shipment->fid,
+  ))
+  ->execute();
+}
+
+
+/**
+ * Function print_labels_table().
+ * 
+ * To prepare rows for print labels page.
+ * @see print_order()
+ */
+function print_labels_table() {
+  $rows = array();
+
+  $query = db_select('print_label_queue', 'n')
+      ->fields('n');
+  $query = $query->execute()->fetchAll();
+  $query = (array) $query;
+  foreach ($query as $key => $shipment) {
+    $col = array();
+    // Ship ID.
+    $col[] = $shipment->sid;
+    // Order ID.
+    $col[] = $shipment->order_id;
+    // Order Status.
+    $col[] = $shipment->order_status;
+    // Ship Date.
+    $col[] = date('Y-M-d', $shipment->ship_date);
+    // Tracking Number.
+    $col[] = $shipment->tracking_number;
+    // Shape.
+    $col[] = $shipment->mail_shape;
+    // Shipping Class.
+    $col[] = $shipment->mail_class;
+    // Shipping Cost.
+    $col[] = $shipment->ship_cost;
+    // To get label file id and create links for label and packing slip.
+    $filename = db_select('file_managed', 'n')
+        ->fields('n', array('filename'))
+        ->condition('n.fid', $shipment->label_fid, '=');
+    $filename = $filename->execute()->fetch();
+    $link['options']['attributes']['target'] = '_blank';
+    // View column.
+    $col[] = l(t('Label'), 'jzebra/endicia_labels/' . $filename->filename,
+        array('attributes' => $link['options']['attributes']))
+        . "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;" . l(t('Packing Slip'),
+        'bulk/orders/packing_slip/view/' . $shipment->order_id . '/'
+        . $shipment->sid, array('attributes' => $link['options']['attributes']));
+    // To create a row of an order.
+    $rows[$shipment->sid] = $col;
+  }
+
+  return $rows;
+}
+
+
+/**
+ * Function uc_shipping_shipment_print_custom().
+ * 
+ * For preparing packing slips of bulk orders (multiple packing slip).
+ */
+function uc_shipping_shipment_print_custom($order, $shipment, $labels = TRUE) {
+  $build = array(
+    '#theme' => 'uc_shipping_shipment_print',
+    '#order' => $order,
+    '#shipment' => $shipment,
+    '#labels' => $labels,
+  );
+  $output = '';
+  drupal_add_http_header('Content-Type', 'text/html; charset=utf-8');
+  $output .= theme('uc_packing_slip_page', array('content' => drupal_render($build)));
+  print $output;
+  print "<br />";
+}
+
+/**
+ * Implements function order_status_validate().
+ * 
+ * To check whether order has been selected or not.
+ * @see print_order()
+ */
+function order_status_validate($form, &$form_state) {
+  $order_var = $form_state['input']['print_labels_table'];
+  $isorders = array();
+  foreach ($order_var as $key => $order) {
+    if (isset($order)) {
+      $isorders[] = $order;
+    }
+  }
+  if ((empty($isorders))) {
+    drupal_set_message("No orders has been selected. Please select atleast any order.", "error");
+    $form_state['rebuild'] = TRUE;
+    drupal_goto('bulk/orders/print');
+  }
+}
+
+/**
+ * Implements hook_form_submit().
+ * 
+ * To handle action on "Update Order Status" button of print order page.
+ * For handling order status of bulk orders and to notify customers through email.
+ */
+function order_status_submit($form, &$form_state) {
+  $shipments = $form_state['values']['print_labels_table'];
+  $notify = $form_state['values']['order_notify'];
+  foreach ($shipments as $key => $ship_id) {
+    if ($ship_id != 0) {
+      $order_id = $form['lable_container']['print_labels_table']['#options'][$ship_id][1];
+      // Updates uc_orders table with new order status.
+      db_update('uc_orders')
+        ->fields(array(
+          'order_status' => $form_state['input']['update_order'],
+        ))
+        ->condition('order_id', $order_id)
+        ->execute();
+      // Updates print_label_queue table with new order status.
+      db_update('print_label_queue')
+        ->fields(array(
+          'order_status' => uc_order_status_data($form_state['input']['update_order'], 'title'),
+        ))
+        ->condition('sid', $ship_id)
+        ->execute();
+      // Send notification to the customer.
+      if (!empty($notify['notify_customer'])) {
+        $to_email = db_select('uc_orders', 'n')
+            ->fields('n', array('primary_email'))
+            ->condition('n.order_id', $order_id, '=');
+        $to_email = $to_email->execute()->fetch();
+        $param = t('Status of your order #@order_id has been changed to @status', array('@order_id' => $order_id, '@status' => $form_state['input']['update_order']));
+        drupal_mail('bulk_order', 'order_status_notification', $to_email, language_default(), array('notify' => $param), uc_store_email_from());
+      }
+    }
+  }
+}
+
+
+/**
+ * To handle action on "Print Package Slip" button of print order page.
+ * 
+ * For creating page for printing of bulk packing slips.
+ */
+function print_package_slip($form, &$form_state) {
+  $shipments = $form_state['values']['print_labels_table'];
+  $notify = $form_state['values']['order_notify'];
+  foreach ($shipments as $key => $ship_id) {
+    if ($ship_id != 0) {
+      $order_id = $form['lable_container']['print_labels_table']['#options'][$ship_id][1];
+      view_packing_slip_page($order_id, $ship_id);
+    }
+  }
+  exit;
+}
+
+
+/**
+ * Print Shipping Label Submit action.
+ * 
+ * To handle action on "Print Shipping Labels" button of print order page.
+ */
+function print_shipping_labels($form, &$form_state) {
+  $shipments = $form_state['values']['print_labels_table'];
+  $shipments_var = array();
+  foreach ($shipments as $key => $value) {
+    if ($value != 0) {
+      $shipments_var[] = $value;
+    }
+  }
+  $query = db_select('print_label_queue', 'n')
+      ->fields('n', array('label_fid'));
+  $query->leftJoin('file_managed', 'm', 'n.label_fid = m.fid');
+  $query->fields('m', array('filename'));
+  $query->condition('n.sid', array($shipments_var), 'IN');
+  $query = $query->execute()->fetchAll();
+  $labels = array();
+  foreach ($query as $key => $filenames) {
+    $labels[] = $filenames->filename;
+  }
+  $_SESSION['labels'] = $labels;
+  drupal_goto('jzebra/label_print');
+}
+
+/**
+ * Back Button functionality on print and order page (screen 5).
+ */
+function order_back_button($form, &$form_state) {
+  unset($_SESSION['selected_pkg']);
+  // Delete print_label_queue table.
+  db_delete('print_label_queue')
+    ->execute();
+  drupal_goto('uber-cart-order-bulk');
+}
+
+/**
+ * Implements hook_views_api().
+ */
+function bulk_order_views_api() {
+  return array(
+    'api' => 3.0,
+  );
+}
+
+/**
+ * Showing view in view section.
+ */
+function bulk_order_views_default_views() {
+  // Check for all view file in views directory.
+  $files = file_scan_directory(drupal_get_path('module', 'bulk_order') . '/views', '/.*\.inc$/');
+
+  // Add view to list of views.
+  foreach ($files as $filepath => $file) {
+    require $filepath;
+    if (isset($view)) {
+      $views[$view->name] = $view;
+    }
+  }
+  return $views;
+}
+
+/**
+ * Implements hook_theme().
+ */
+function bulk_order_theme($existing, $type, $theme, $path) {
+  return array(
+    'bulk_order_view' => array(
+      'render element' => 'form',
+      'template' => 'bulk_order_view',
+      'path' => $path . '/theme',
+    ),
+    'store_order_view' => array(
+      'render element' => 'form',
+      'template' => 'store_order_view',
+      'path' => $path . '/theme',
+    ),
+  );
+}
+
+/**
+ * Header Link Section.
+ */
+function header_links_section() {
+  $form = array();
+  $form['link_container']                = array(
+    '#type' => 'fieldset',
+    '#weight' => -1,
+  );
+  $form['link_container']['title']       = array(
+    '#type' => 'markup',
+    '#markup' => '<span class="title">' . t('Cloud Postage - Batch Order Processing') . '</span>',
+    '#prefix' => '<div class="bulk-order-container">',
+  );
+  $form['link_container']['package']     = array(
+    '#type' => 'markup',
+    '#markup' => l(t('Package Orders'), 'uber-cart-order-bulk', array(
+        'attributes' => array(
+          'class' => array(
+            'package_order',
+          ),
+        ),
+    )),
+    '#prefix' => '<span class="package">',
+    '#suffix' => '</span>',
+  );
+  $form['link_container']['labels']      = array(
+    '#type' => 'markup',
+    '#markup' => l(t('Create Labels'), 'bulk/orders/labels', array(
+        'attributes' => array(
+          'class' => array(
+            'create_labels',
+          ),
+        ),
+    )),
+    '#prefix' => '<span class="order">',
+    '#suffix' => '</span>',
+  );
+  $form['link_container']['print_order'] = array(
+    '#type' => 'markup',
+    '#markup' => l(t('Print & Update'), 'bulk/orders/print', array(
+        'attributes' => array(
+          'class' => array(
+            'print_update',
+          ),
+        ),
+    )),
+    '#prefix' => '<span class="print">',
+    '#suffix' => '</span></div>',
+  );
+  return $form;
+}
+
